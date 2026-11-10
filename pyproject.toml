@@ -1,0 +1,56 @@
+[project]
+name = "zirve-finansman-mcp"
+version = "0.1.0"
+description = "Zirve Finansman muhasebe yazılımı için unofficial, salt okunur MCP sunucusu (MSSQL)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+keywords = ["mcp", "zirve", "zirve-finansman", "muhasebe", "accounting", "mssql"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Natural Language :: Turkish",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = ["mcp>=2", "pymssql>=2.3"]
+
+[project.urls]
+Homepage = "https://github.com/yibudak/zirve-finansman-mcp"
+Issues = "https://github.com/yibudak/zirve-finansman-mcp/issues"
+Changelog = "https://github.com/yibudak/zirve-finansman-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+zirve-finansman-mcp = "zirve_mcp:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+include = ["zirve_mcp.py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["zirve_mcp.py", "test_zirve_mcp.py", "sql", "docs", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]
+# S608: SQL metni f-string ile kurulur; araya giren tek değişken, sunucudan okunan listeden seçilip
+# köşeli parantezle alıntılanan veritabanı adıdır. Kullanıcı girdisi her zaman parametre olarak gider.
+ignore = ["S608"]
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["test_zirve_mcp.py"]
