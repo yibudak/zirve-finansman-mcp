@@ -5,7 +5,7 @@
 [![CI](https://github.com/yibudak/zirve-finansman-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/yibudak/zirve-finansman-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/zirve-finansman-mcp)](https://pypi.org/project/zirve-finansman-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/zirve-finansman-mcp)](https://pypi.org/project/zirve-finansman-mcp/)
-[![Lisans: MIT](https://img.shields.io/badge/lisans-MIT-blue.svg)](LICENSE)
+[![Lisans: AGPL-3.0](https://img.shields.io/badge/lisans-AGPL--3.0-blue.svg)](LICENSE)
 
 Zirve Finansman'ın genel muhasebe verisini yapay zekâ ajanlarına açan, salt okunur bir
 [MCP](https://modelcontextprotocol.io) sunucusu. Zirve'nin MSSQL veritabanına bağlanır. Ajan hesap
@@ -131,4 +131,5 @@ bağlantısından özel olarak bildirin. Ayrıntılar [SECURITY.md](SECURITY.md)
 
 ## Lisans
 
-[MIT](LICENSE)
+[AGPL-3.0-or-later](LICENSE). Sunucuyu değiştirip ağ üzerinden başkalarına kullandırırsanız değiştirdiğiniz
+kaynak kodu da aynı lisansla paylaşmanız gerekir.

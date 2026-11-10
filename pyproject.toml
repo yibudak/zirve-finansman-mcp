@@ -3,7 +3,7 @@ name = "zirve-finansman-mcp"
 version = "0.1.0"
 description = "Zirve Finansman muhasebe yazılımı için unofficial, salt okunur MCP sunucusu (MSSQL)"
 readme = "README.md"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 keywords = ["mcp", "zirve", "zirve-finansman", "muhasebe", "accounting", "mssql"]
