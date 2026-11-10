@@ -21,13 +21,13 @@ planını, fişleri ve yevmiye satırlarını okur, mizan ve muavin alır.
 
 | Araç | İşlevi |
 |---|---|
-| `firmalari_listele` | Firmaları ve muhasebe verisi bulunan yılları listeler |
+| `firmalari_listele` | Firmaları, kayıt bulunan yılları ve boş yılları listeler |
 | `hesap_ara` | Hesap planında ada, kod ön ekine veya VKN/TCKN'ye göre arar |
 | `mizan` | Hesap bazında borç, alacak ve bakiye verir (detay ya da ana hesap seviyesinde, tarih aralığıyla) |
 | `muavin` | Bir hesabın hareketlerini devreden ve yürüyen bakiyeyle verir |
 | `yevmiye_ara` | Yevmiye satırlarını evrak no, VKN, açıklama, hesap, tutar ve tarihe göre arar |
 | `fisleri_listele` | Fiş başlıklarını listeler, belli bir tarihten sonra kaydedilenleri süzer |
-| `fis_getir` | Bir fişi başlığı ve bütün satırlarıyla getirir |
+| `fis_getir` | Bir fişi başlığı ve satırlarıyla getirir (satırlar sayfalı) |
 
 Araçların hiçbiri veri yazmaz. Serbest SQL çalıştıran bir araç da bilerek eklenmedi.
 
@@ -100,8 +100,11 @@ o anda kaydedilmekte olan bir fişi yarım görebilirsiniz.
 
 Zirve tutarları `float` olarak saklar. Sunucu sonuçları kuruşa yuvarlar.
 
-`mizan` aracı, Zirve'nin "kapanış fişi hariç" mizanı gibi kapanış fişini varsayılan olarak saymaz.
-Kapanış fişi dahil edilirse kapanmış yıllarda bütün bakiyeler sıfır çıkar.
+`mizan` ve `muavin` araçları, Zirve'nin "kapanış fişi hariç" mizanı gibi kapanış fişini varsayılan olarak
+saymaz. Kapanış fişi `kapanis_dahil` ile dahil edilirse kapanmış yıllarda bütün bakiyeler sıfır çıkar.
+
+Metin aramaları büyük-küçük harf ve Türkçe karakter ayrımı gözetmez: "CIVATA", "civata" ve "CİVATA" aynı
+kayıtları bulur.
 
 Zirve'de bir fiş düzeltilince `Refno` değişir. Fişi sonradan yeniden bulmak için `Fisno` kullanın.
 

@@ -65,8 +65,46 @@ def test_where():
         raise AssertionError
 
 
+def test_parse_datetime():
+    assert z.parse_datetime("2026-11-10", "x") == datetime(2026, 11, 10)
+    assert z.parse_datetime("2026-11-10 14:00:00", "x") == datetime(2026, 11, 10, 14)
+    assert z.parse_datetime(None, "x") is None
+    try:
+        z.parse_datetime("dün", "x")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError
+
+
+def test_fold_and_text():
+    assert z.fold("CİVATA ışık") == "CiVATA işik"
+    w = z.Where()
+    w.text("h.Aciklama", "CIVATA%")
+    assert "Latin1_General_CI_AI LIKE %s" in w.sql and w.params == ["%CIVATA\\%%"]
+
+
+def test_errors_reach_client():
+    """Beklenen hatalar ToolError olarak çıkmalı; SDK başka istisnaların mesajını gizler."""
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    for call in (lambda: z.yevmiye_ara(), lambda: z.mizan(seviye="orta"), lambda: z.muavin("100", offset=-1)):
+        try:
+            call()
+        except ToolError as e:
+            assert str(e)
+        else:
+            raise AssertionError
+
+
 def test_page_and_clamp():
-    assert z.clamp(10**6) == z.MAX_LIMIT and z.clamp(0) == 1
+    assert z.paging(10**6, 0) == (z.MAX_LIMIT, 0) and z.paging(0, 5) == (1, 5)
+    try:
+        z.paging(10, -1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError
     assert z.page([1, 2, 3], 2, 0) == {"kayitlar": [1, 2], "offset": 0, "devami_var": True, "sonraki_offset": 2}
     assert z.page([1], 2, 4) == {"kayitlar": [1], "offset": 4, "devami_var": False}
 

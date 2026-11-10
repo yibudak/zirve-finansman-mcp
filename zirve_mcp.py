@@ -4,6 +4,7 @@ Yalnızca sabit, parametreli SELECT sorguları çalıştırır; serbest SQL arac
 Asıl salt-okunur güvencesi veritabanı tarafında verilmelidir: sql/create_readonly_login.sql
 """
 
+import functools
 import os
 import re
 from contextlib import contextmanager
@@ -11,10 +12,10 @@ from datetime import date, datetime
 
 import pymssql
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 MAX_LIMIT = 500
-MAX_VOUCHER_LINES = 2000
 DB_RE = re.compile(r"^(?P<firma>.+)_(?P<yil>\d{4})$")  # ör. FIRMA_2026 (…T ve …_GENEL eşleşmez)
 
 # Yevmiye satırı için her yıl veritabanında bulunan çekirdek kolonlar.
@@ -39,7 +40,8 @@ mcp = MCPServer(
         "9=belge yok; diğer kodların ve Odeme_Sekli kodlarının anlamı doğrulanmamıştır, ham kod olarak yorumlayın. "
         "Evrakno fatura/belge numarasıdır ve dış sistemlerle eşleştirme için en iyi anahtardır; "
         "Vergino karşı tarafın VKN/TCKN'sidir. Hesap kodlarında ayırıcı çoğunlukla '.' olsa da ',' ve '-' "
-        "içeren kodlar vardır; kodu olduğu gibi kullanın. Tarihler YYYY-AA-GG biçimindedir."
+        "içeren kodlar vardır; kodu olduğu gibi kullanın. Tarihler YYYY-AA-GG biçimindedir. "
+        "mizan ve muavin, Zirve'nin varsayılanı gibi kapanış fişini saymaz (kapanis_dahil ile değişir)."
     ),
 )
 
@@ -90,13 +92,39 @@ def parse_date(s: str | None, name: str) -> date | None:
     if not s:
         return None
     try:
-        return date.fromisoformat(s)
+        return date.fromisoformat(s.strip())
     except ValueError:
         raise ValueError(f"{name} YYYY-AA-GG biçiminde olmalı: {s!r}") from None
 
 
-def clamp(limit: int) -> int:
-    return max(1, min(int(limit), MAX_LIMIT))
+def parse_datetime(s: str | None, name: str) -> datetime | None:
+    """Yalnız tarih (YYYY-AA-GG) ya da tarih ve saat (YYYY-AA-GG SS:DD[:SS]) kabul eder."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.strip())
+    except ValueError:
+        raise ValueError(f"{name} YYYY-AA-GG veya YYYY-AA-GG SS:DD:SS biçiminde olmalı: {s!r}") from None
+
+
+def paging(limit: int, offset: int) -> tuple[int, int]:
+    """limit'i 1..MAX_LIMIT aralığına çeker, negatif offset'i reddeder."""
+    if int(offset) < 0:
+        raise ValueError(f"offset negatif olamaz: {offset}")
+    return max(1, min(int(limit), MAX_LIMIT)), int(offset)
+
+
+def fold(s: str) -> str:
+    """Türkçe i/ı/İ/I ayrımını arama için tek harfe indirir (SQL tarafındaki fold_sql ile aynı kural)."""
+    return s.replace("İ", "i").replace("ı", "i")
+
+
+def fold_sql(column: str) -> str:
+    """Kolonu büyük-küçük harf, aksan ve Türkçe i ayrımı gözetmeden karşılaştırılır hâle getirir.
+
+    Böylece "CIVATA", "civata" ve "CİVATA" aynı kaydı bulur; "SIRKET" de "ŞİRKET" ile eşleşir.
+    """
+    return f"REPLACE(REPLACE({column}, N'İ', N'i'), N'ı', N'i') COLLATE Latin1_General_CI_AI"
 
 
 def group_databases(names) -> dict[str, dict[int, str]]:
@@ -144,6 +172,11 @@ class Where:
             pattern = like_escape(value.strip()) + "%"
             self.add(f"{column} LIKE %s ESCAPE '\\'", pattern if prefix else "%" + pattern)
 
+    def text(self, column: str, value: str | None):
+        """Metin içinde arama: büyük-küçük harf, aksan ve Türkçe i ayrımı gözetmez."""
+        if value:
+            self.add(f"{fold_sql(column)} LIKE %s ESCAPE '\\'", "%" + like_escape(fold(value.strip())) + "%")
+
     def dates(self, column: str, baslangic: str | None, bitis: str | None):
         b, e = parse_date(baslangic, "baslangic"), parse_date(bitis, "bitis")
         if b:
@@ -163,7 +196,7 @@ class Where:
 def cursor():
     server = os.environ.get("ZIRVE_SERVER")
     if not server:
-        raise RuntimeError("ZIRVE_SERVER ortam değişkeni tanımlı değil (ör. 10.0.0.5 veya HOST\\ZRVSQL2014)")
+        raise ValueError("ZIRVE_SERVER ortam değişkeni tanımlı değil (ör. 10.0.0.5 veya HOST\\ZRVSQL2014)")
     kwargs = {}
     if os.environ.get("ZIRVE_PORT"):
         kwargs["port"] = os.environ["ZIRVE_PORT"]
@@ -210,23 +243,67 @@ def page(rows: list[dict], limit: int, offset: int) -> dict:
 
 
 PAGING = "OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
+BOS_YIL_NOTU = "Bu firma/yıl veritabanında hiç yevmiye kaydı yok; verisi olan yıllar için firmalari_listele."
+
+
+def has_data(cur, db: str) -> bool:
+    cur.execute(f"SELECT TOP 1 1 AS x FROM {db}.dbo.yevmiye")
+    return cur.fetchone() is not None
+
+
+def note_if_empty(cur, db: str, out: dict) -> dict:
+    """Sonuç boşsa ve yılın kendisi boşsa bunu söyler; ajan "kayıt yok" ile "yıl boş"u ayırabilsin."""
+    if not out["kayitlar"] and not has_data(cur, db):
+        out["not"] = BOS_YIL_NOTU
+    return out
+
+
+def db_error_text(e: Exception) -> str:
+    msg = e.args[-1] if e.args else e
+    if isinstance(msg, bytes):
+        msg = msg.decode("utf-8", "replace")
+    return " ".join(str(msg).split())[:500]
+
+
+def tool(fn):
+    """Aracı kaydeder ve beklenen hataları, metni istemciye ulaşan ToolError'a çevirir.
+
+    MCP SDK'sı ToolError dışındaki istisnaların mesajını istemciden gizler; ajan sebebi göremeyince
+    aynı çağrıyı tekrarlar.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError as e:
+            raise ToolError(str(e)) from None
+        except pymssql.Error as e:
+            raise ToolError(f"Veritabanı hatası: {db_error_text(e)}") from e
+
+    return mcp.tool(annotations=READ_ONLY)(wrapper)
 
 
 # ---------- araçlar ----------
 
 
-@mcp.tool(annotations=READ_ONLY)
+@tool
 def firmalari_listele() -> dict:
-    """Zirve'deki firmaları ve her firmanın muhasebe verisi bulunan yıllarını listeler."""
+    """Zirve'deki firmaları listeler: yillar yevmiye kaydı bulunan, bos_yillar veritabanı olup boş olan yıllar."""
+    firmalar = []
     with cursor() as cur:
-        dbs = databases(cur)
-    return {
-        "firmalar": [{"firma": f, "yillar": sorted(y)} for f, y in sorted(dbs.items())],
-        "varsayilan_firma": os.environ.get("ZIRVE_FIRMA"),
-    }
+        for firma, years in sorted(databases(cur).items()):
+            dolu, bos = [], []
+            for yil in sorted(years):
+                try:
+                    (dolu if has_data(cur, resolve_db({firma: years}, firma, yil)) else bos).append(yil)
+                except pymssql.Error:  # yevmiye tablosu yok ya da okuma yetkisi verilmemiş
+                    bos.append(yil)
+            firmalar.append({"firma": firma, "yillar": dolu, "bos_yillar": bos})
+    return {"firmalar": firmalar, "varsayilan_firma": os.environ.get("ZIRVE_FIRMA")}
 
 
-@mcp.tool(annotations=READ_ONLY)
+@tool
 def hesap_ara(
     arama: str | None = None,
     kod_on_eki: str | None = None,
@@ -239,14 +316,15 @@ def hesap_ara(
 ) -> dict:
     """Hesap planında arama yapar (cari hesaplar dahil; ör. 120=alıcılar, 320=satıcılar).
 
-    arama: hesap adında geçen metin. kod_on_eki: hesap kodu başlangıcı (ör. "120" veya "320.01").
+    arama: hesap adında geçen metin (büyük-küçük harf ve Türkçe karakter ayrımı gözetmez).
+    kod_on_eki: hesap kodu başlangıcı (ör. "120" veya "320.01").
     vergi_no: hesaba tanımlı VKN/TCKN. sadece_detay: yalnızca kayıt girilebilen alt hesaplar.
     Hesap kartlarının çoğunda VKN boştur; vergi_no ile sonuç çıkmazsa yevmiye_ara(vergi_no=...,
     hesap_on_eki="120" veya "320") ile carinin hesap kodunu yevmiye satırlarından bulun.
     """
-    limit = clamp(limit)
+    limit, offset = paging(limit, offset)
     w = Where()
-    w.like("h.Aciklama", arama)
+    w.text("h.Aciklama", arama)
     w.like("h.Kod", kod_on_eki, prefix=True)
     if vergi_no:
         vkn = vkn_norm(vergi_no)
@@ -263,10 +341,10 @@ def hesap_ara(
             ORDER BY h.Kod {PAGING}""",
             [*w.params, offset, limit + 1],
         )
-    return page(rows, limit, offset)
+        return note_if_empty(cur, db, page(rows, limit, offset))
 
 
-@mcp.tool(annotations=READ_ONLY)
+@tool
 def mizan(
     kod_on_eki: str | None = None,
     baslangic: str | None = None,
@@ -288,8 +366,13 @@ def mizan(
     sayılmaz; True verilirse kapanmış yıllarda tüm bakiyeler sıfırlanır.
     """
     if seviye not in ("detay", "ana"):
-        raise ValueError('seviye "detay" veya "ana" olmalı')
-    limit = clamp(limit)
+        raise ValueError(f'seviye "detay" veya "ana" olmalı: {seviye!r}')
+    if seviye == "ana" and kod_on_eki and len(kod_on_eki.strip()) > 3:
+        raise ValueError(
+            'seviye="ana" ilk 3 haneye göre gruplar; kod_on_eki en çok 3 karakter olabilir. '
+            'Alt kırılımın toplamı için seviye="detay" verip sonuçtaki toplam alanına bakın.'
+        )
+    limit, offset = paging(limit, offset)
     kod = "y.Gmkod" if seviye == "detay" else "LEFT(y.Gmkod, 3)"
     w = Where(YEV_FILTER)
     if not kapanis_dahil:
@@ -317,14 +400,15 @@ def mizan(
             FROM {db}.dbo.yevmiye y WHERE {w.sql}""",
             w.params,
         )
-    return {**page(rows, limit, offset), "toplam": total[0] if total else {}}
+        return note_if_empty(cur, db, {**page(rows, limit, offset), "toplam": total[0] if total else {}})
 
 
-@mcp.tool(annotations=READ_ONLY)
+@tool
 def muavin(
     hesap_kodu: str,
     baslangic: str | None = None,
     bitis: str | None = None,
+    kapanis_dahil: bool = False,
     limit: int = 200,
     offset: int = 0,
     firma: str | None = None,
@@ -334,26 +418,33 @@ def muavin(
 
     hesap_kodu: tam hesap kodu (ör. "120.00010"; hesap_ara ile bulunur). baslangic verilirse o tarihten
     önceki hareketler "devreden" olarak özetlenir. Bakiye pozitifse borç, negatifse alacak bakiyesidir.
+    kapanis_dahil: mizan ile tutarlı olsun diye kapanış fişi (Fistur 9) varsayılan olarak sayılmaz; True
+    verilirse kapanmış yılda kapanış bakiyesi sıfır çıkar. Ana hesap ya da olmayan kod verilirse hata döner.
     """
-    limit = clamp(limit)
+    limit, offset = paging(limit, offset)
     kod = hesap_kodu.strip()
     b = parse_date(baslangic, "baslangic")
-    w = Where(YEV_FILTER, "y.Gmkod = %s")
-    w.params.append(kod)
+    base = Where(YEV_FILTER, "y.Gmkod = %s")
+    base.params.append(kod)
+    if not kapanis_dahil:
+        base.add("y.Fistur <> '9'")
+    w = Where(*base.clauses)
+    w.params = list(base.params)
     w.dates("y.Fistar", baslangic, bitis)
     with cursor() as cur:
         db = resolve_db(databases(cur), firma, yil)
         hesap = fetch(
             cur,
-            f"SELECT h.Kod, h.Aciklama, h.Vergikimlikno, h.Tckimlikno FROM {db}.dbo.hesplan h WHERE h.Kod = %s",
+            f"""SELECT h.Kod, h.Aciklama, h.Detay, h.Vergikimlikno, h.Tckimlikno
+                FROM {db}.dbo.hesplan h WHERE h.Kod = %s""",
             [kod],
         )
         devir = 0.0
         if b:
             cur.execute(
                 f"""SELECT SUM(ISNULL(y.Borclu,0)) - SUM(ISNULL(y.Alacakli,0)) AS d
-                            FROM {db}.dbo.yevmiye y WHERE {YEV_FILTER} AND y.Gmkod = %s AND y.Fistar < %s""",
-                (kod, b),
+                            FROM {db}.dbo.yevmiye y WHERE {base.sql} AND y.Fistar < %s""",
+                (*base.params, b),
             )
             devir = round(cur.fetchone()["d"] or 0.0, 2)
         rows = fetch(
@@ -373,11 +464,20 @@ def muavin(
             FROM {db}.dbo.yevmiye y WHERE {w.sql}""",
             w.params,
         )[0]
+        if not total.get("SatirSayisi") and not devir:
+            if not hesap:
+                bos = "" if has_data(cur, db) else " " + BOS_YIL_NOTU
+                raise ValueError(f"Hesap kodu bulunamadı: {kod!r}. Doğru kodu hesap_ara ile bulun.{bos}")
+            if hesap[0].get("Detay") == "H":
+                raise ValueError(
+                    f"{kod!r} bir ana hesap, üzerinde hareket olmaz. Alt hesap kodu verin (hesap_ara(kod_on_eki=...)); "
+                    f"ana hesabın toplamı için mizan(kod_on_eki=...), hareketleri için yevmiye_ara(hesap_on_eki=...)."
+                )
     total["KapanisBakiyesi"] = round(devir + total.get("Borc", 0) - total.get("Alacak", 0), 2)
     return {"hesap": hesap[0] if hesap else None, "devreden": devir, **page(rows, limit, offset), "toplam": total}
 
 
-@mcp.tool(annotations=READ_ONLY)
+@tool
 def yevmiye_ara(
     evrak_no: str | None = None,
     vergi_no: str | None = None,
@@ -395,14 +495,15 @@ def yevmiye_ara(
     """Yevmiye satırlarında arama yapar; dış sistem kayıtlarını Zirve'de bulmak için ana araçtır.
 
     evrak_no: fatura/belge numarasında geçen metin. vergi_no: satırdaki VKN/TCKN (tam eşleşme).
-    aciklama: satır açıklamasında geçen metin. hesap_on_eki: hesap kodu başlangıcı (ör. "120", "600").
+    aciklama: satır açıklamasında geçen metin (büyük-küçük harf ve Türkçe karakter ayrımı gözetmez).
+    hesap_on_eki: hesap kodu başlangıcı (ör. "120", "600").
     tutar_min/tutar_max: satırın TL tutarı (borç veya alacak); tam tutar için ikisine aynı değeri verin.
     baslangic/bitis: fiş tarihi aralığı. En az bir filtre verin.
     """
-    limit = clamp(limit)
+    limit, offset = paging(limit, offset)
     w = Where(YEV_FILTER)
     w.like("y.Evrakno", evrak_no)
-    w.like("y.Aciklama", aciklama)
+    w.text("y.Aciklama", aciklama)
     w.like("y.Gmkod", hesap_on_eki, prefix=True)
     if vergi_no:
         w.add(f"{vkn_sql('y.Vergino')} = %s", vkn_norm(vergi_no))
@@ -423,7 +524,7 @@ def yevmiye_ara(
             ORDER BY y.Fistar, y.Refno, y.Refno2 {PAGING}""",
             [*w.params, offset, limit + 1],
         )
-    return page(rows, limit, offset)
+        return note_if_empty(cur, db, page(rows, limit, offset))
 
 
 FIS_COLS = (
@@ -431,7 +532,7 @@ FIS_COLS = (
 )
 
 
-@mcp.tool(annotations=READ_ONLY)
+@tool
 def fisleri_listele(
     baslangic: str | None = None,
     bitis: str | None = None,
@@ -445,15 +546,16 @@ def fisleri_listele(
 ) -> dict:
     """Muhasebe fişlerinin başlıklarını listeler (en son kaydedilen önce).
 
-    baslangic/bitis: fiş tarihi aralığı. kayit_tarihinden_sonra: kayıt zamanı (Kayittarihi) bu tarihten
-    (YYYY-AA-GG) sonra olan fişler; "son kontrolden beri ne girildi" sorusu için. fis_no: fiş numarası
+    baslangic/bitis: fiş tarihi aralığı. kayit_tarihinden_sonra: kayıt zamanı (Kayittarihi) bu andan
+    sonra olan fişler; YYYY-AA-GG ya da saatle YYYY-AA-GG SS:DD:SS. "Son kontrolden beri ne girildi"
+    sorusu için. fis_no: fiş numarası
     (baştaki sıfırlar olmadan da verilebilir). kullanici: fişi kaydeden Zirve kullanıcısı (Ozkod).
     Btop/Atop fişin borç/alacak toplamıdır. Satırlar için fis_getir kullanın.
     """
-    limit = clamp(limit)
+    limit, offset = paging(limit, offset)
     w = Where()
     w.dates("f.Fistar", baslangic, bitis)
-    k = parse_date(kayit_tarihinden_sonra, "kayit_tarihinden_sonra")
+    k = parse_datetime(kayit_tarihinden_sonra, "kayit_tarihinden_sonra")
     if k:
         w.add("f.Kayittarihi >= %s", k)
     if fis_no:
@@ -469,29 +571,34 @@ def fisleri_listele(
             ORDER BY f.Kayittarihi DESC, f.Refno DESC {PAGING}""",
             [*w.params, offset, limit + 1],
         )
-    return page(rows, limit, offset)
+        return note_if_empty(cur, db, page(rows, limit, offset))
 
 
-@mcp.tool(annotations=READ_ONLY)
-def fis_getir(refno: int, firma: str | None = None, yil: int | None = None) -> dict:
-    """Tek bir muhasebe fişini başlığı ve tüm yevmiye satırlarıyla getirir.
+@tool
+def fis_getir(refno: int, limit: int = 200, offset: int = 0, firma: str | None = None, yil: int | None = None) -> dict:
+    """Tek bir muhasebe fişini başlığı ve yevmiye satırlarıyla getirir (satırlar sayfalıdır).
 
     refno: fişin Refno değeri (yevmiye_ara, muavin ve fisleri_listele sonuçlarında bulunur).
+    satir_sayisi fişteki toplam satırdır; devami_var ise sonraki_offset ile devam edin.
     Not: Zirve'de bir fiş düzeltildiğinde Refno değişir; kalıcı referans olarak Fisno kullanın.
     """
+    limit, offset = paging(limit, offset)
     with cursor() as cur:
         db = resolve_db(databases(cur), firma, yil)
         head = fetch(cur, f"SELECT {FIS_COLS} FROM {db}.dbo.fisbil f WHERE f.Refno = %s", [int(refno)])
         if not head:
-            raise ValueError(f"Fiş bulunamadı: Refno={refno}")
+            bos = "" if has_data(cur, db) else " " + BOS_YIL_NOTU
+            raise ValueError(f"Fiş bulunamadı: Refno={refno}. Fiş düzeltildiyse Refno değişmiş olabilir.{bos}")
+        cur.execute(f"SELECT COUNT(*) AS n FROM {db}.dbo.yevmiye y WHERE y.Refno = %s", (int(refno),))
+        n = cur.fetchone()["n"]
         lines = fetch(
             cur,
-            f"""
-            SELECT TOP {MAX_VOUCHER_LINES + 1} {YEV_COLS} FROM {db}.dbo.yevmiye y
-            WHERE y.Refno = %s ORDER BY y.Refno2""",
-            [int(refno)],
+            f"SELECT {YEV_COLS} FROM {db}.dbo.yevmiye y WHERE y.Refno = %s ORDER BY y.Refno2 {PAGING}",
+            [int(refno), offset, limit + 1],
         )
-    return {"fis": head[0], "satirlar": lines[:MAX_VOUCHER_LINES], "satirlar_kesildi": len(lines) > MAX_VOUCHER_LINES}
+    out = page(lines, limit, offset)
+    out["satirlar"] = out.pop("kayitlar")
+    return {"fis": head[0], "satir_sayisi": n, **out}
 
 
 def main():
