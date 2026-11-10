@@ -54,12 +54,24 @@ def like_escape(s: str) -> str:
     return re.sub(r"([\\%_\[])", r"\\\1", s)
 
 
+VKN_COLS = {"Vergino", "Vergikimlikno", "Tckimlikno"}
+
+
+def vkn_norm(s: str) -> str:
+    """VKN/TCKN'deki kesme işaretlerini ve boşlukları atar (Zirve'de bir kısmı '1234567890 biçiminde saklı)."""
+    return re.sub(r"['\s]", "", s)
+
+
+def vkn_sql(column: str) -> str:
+    return f"REPLACE({column}, '''', '')"
+
+
 def clean(row: dict) -> dict:
     """Boş alanları atar, float'ları kuruşa yuvarlar, tarihleri ISO metne çevirir."""
     out = {}
     for k, v in row.items():
         if isinstance(v, str):
-            v = v.strip()
+            v = vkn_norm(v) if k in VKN_COLS else v.strip()
         if v is None or v == "":
             continue
         if isinstance(v, float):
@@ -229,13 +241,16 @@ def hesap_ara(
 
     arama: hesap adında geçen metin. kod_on_eki: hesap kodu başlangıcı (ör. "120" veya "320.01").
     vergi_no: hesaba tanımlı VKN/TCKN. sadece_detay: yalnızca kayıt girilebilen alt hesaplar.
+    Hesap kartlarının çoğunda VKN boştur; vergi_no ile sonuç çıkmazsa yevmiye_ara(vergi_no=...,
+    hesap_on_eki="120" veya "320") ile carinin hesap kodunu yevmiye satırlarından bulun.
     """
     limit = clamp(limit)
     w = Where()
     w.like("h.Aciklama", arama)
     w.like("h.Kod", kod_on_eki, prefix=True)
     if vergi_no:
-        w.add("(h.Vergikimlikno = %s OR h.Tckimlikno = %s)", vergi_no.strip(), vergi_no.strip())
+        vkn = vkn_norm(vergi_no)
+        w.add(f"({vkn_sql('h.Vergikimlikno')} = %s OR {vkn_sql('h.Tckimlikno')} = %s)", vkn, vkn)
     if sadece_detay:
         w.add("h.Detay = 'E'")
     with cursor() as cur:
@@ -390,7 +405,7 @@ def yevmiye_ara(
     w.like("y.Aciklama", aciklama)
     w.like("y.Gmkod", hesap_on_eki, prefix=True)
     if vergi_no:
-        w.add("y.Vergino = %s", vergi_no.strip())
+        w.add(f"{vkn_sql('y.Vergino')} = %s", vkn_norm(vergi_no))
     tutar = "(ISNULL(y.Borclu,0) + ISNULL(y.Alacakli,0))"
     if tutar_min is not None:
         w.add(f"{tutar} >= %s", float(tutar_min) - 0.005)

@@ -79,7 +79,7 @@ Anahtar: `Refno` (fiş) + `Refno2` (satır sırası).
 | `Fistar`, `Fistur`, `Fisno`, `Yevno` | Başlıktan kopyalanır |
 | `Aciklama` | Satır açıklaması |
 | `Evraktarihi`, `Evrakno`, `serino` | Belge tarihi / numarası (fatura no vb.) |
-| `Vergino` | Karşı tarafın VKN/TCKN'si |
+| `Vergino` | Karşı tarafın VKN/TCKN'si. Bir kısmı başında kesme işaretiyle saklıdır (`'1234567890`, muhtemelen Excel'den aktarım izi); karşılaştırırken kesme işaretini atın. Yabancı carilerde harf içeren vergi numaraları da bulunur |
 | `Belge_Turu` | e-Defter belge türü: `1` fatura, `8` diğer (adı `Belge_Turu_Aciklamasi`nda; ör. banka ekstresi, bordro), `9` belge yok **[çıkarım: veriden]**; `2`, `3`, `6` da görülür, anlamları doğrulanmadı (muhtemelen çek, senet, makbuz) |
 | `Belge_Turu_Aciklamasi` | "Diğer" belge türünün serbest metin adı |
 | `Odeme_Sekli` | e-Defter ödeme şekli. Doğrulanmadı; kullanıldığı hesap gruplarına göre muhtemelen `1` kasa, `2` banka, `3` çek, `4` senet, `5` kredi kartı |

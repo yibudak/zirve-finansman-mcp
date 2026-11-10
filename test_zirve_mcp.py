@@ -9,6 +9,12 @@ def test_like_escape():
     assert z.like_escape("50%_[x]\\") == "50\\%\\_\\[x]\\\\"
 
 
+def test_vkn():
+    assert z.vkn_norm(" '1234567890 ") == "1234567890"
+    assert z.vkn_sql("y.Vergino") == "REPLACE(y.Vergino, '''', '')"
+    assert z.clean({"Vergino": "'1234567890", "Aciklama": "O'Neil"}) == {"Vergino": "1234567890", "Aciklama": "O'Neil"}
+
+
 def test_clean():
     row = {
         "a": " x ",
