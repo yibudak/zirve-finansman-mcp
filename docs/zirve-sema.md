@@ -23,7 +23,7 @@ collation kullanır.
 | Veritabanı | İçerik |
 |---|---|
 | `zirvegenel` | Tüm firmalar için ortak tanımlar: firma listesi (`FirmalarListesi`), döviz cinsleri (`dovizcin`), kurlar (`dovizkur`), vergi daireleri, şablon hesap planı |
-| `{FIRMA}_GENEL` | Firmanın yıldan bağımsız verisi: bordro/personel, beyannameler, demirbaşlar |
+| `{FIRMA}_GENEL` | Firmanın yıldan bağımsız verisi: bordro/personel, beyannameler, demirbaşlar (`dbas`, `dbayd`) |
 | `{FIRMA}_{YIL}` | **Genel muhasebe**: hesap planı, fişler, yevmiye, e-Defter |
 | `{FIRMA}_{YIL}T` | Ticari modül: cari, stok, fatura, kasa, banka, çek/senet |
 
@@ -92,6 +92,43 @@ Anahtar: `Refno` (fiş) + `Refno2` (satır sırası).
 - `ISLEMKOD`: ticari modül işlem kodları (30–39 cari, 40–48 kasa, 50–59 banka, 60–69 fatura, …).
 - `tbMuhasebelestirmeBelgeTuru`: muhasebeleştirme belge türleri (60 satış faturası, 62 alış faturası, …).
 - `EBelge.tbEBelge`, `hub.tbInvoiceHead`: indirilen e-belgeler.
+
+## Demirbaş tabloları (`{FIRMA}_GENEL`)
+
+Demirbaş (sabit kıymet) modülü yıl veritabanında değil, firmanın `_GENEL` veritabanında durur. Kolon adları
+kısaltmadır; aşağıdaki anlamlar yardım dosyası, kolon adları ve satırlardaki aritmetikle eşleştirilerek
+çıkarılmıştır **[çıkarım]**.
+
+### `dbas` — demirbaş kartı
+Anahtar: `Dkodu`. `dbasy` aynı yapıda ikinci bir tablodur, anlamı doğrulanmadı.
+
+| Kolon | Anlam |
+|---|---|
+| `Dkodu`, `Dacik` | Demirbaş kodu ve adı. Kod çoğu kurulumda muhasebe hesap koduyla aynıdır |
+| `Datar`, `Daeno`, `Datutar`, `Dakdv`, `Daafir`, `Avergino` | Alış tarihi, evrak no, tutar, KDV, alınan firma ve VKN'si |
+| `Amt`, `Amo`, `Ams`, `Kismia` | Amortisman tipi (`NORMAL` / `AZALAN`), oranı (yüzde), süresi (yıl), kıst amortisman (`EVET` / `HAYIR`) |
+| `St`, `Stut`, `Skdv`, `Sfno`, `Sfir`, `Svergino` | Satış tarihi, tutarı, KDV'si, fatura no, satılan firma ve VKN'si. `St` boşsa demirbaş satılmamıştır |
+| `Demmuhhk` | Demirbaşın muhasebe hesap kodu (25x) |
+| `Hpbada`, `Hpdaa` | Birikmiş amortisman hesabı (257) ve amortisman gider hesabı (730 / 770) |
+| `Ozkod`, `Miktar` | Özel kod, miktar |
+
+### `dbayd` — yıllık değerleme ve amortisman
+Demirbaş (`Dk`) ve yıl (`Hy`) başına bir satır. Zirve bu satırları Demirbaşlar > Raporlar ekranı
+çalıştırıldığında üretir; bazı yıllar eksik ya da eski kalabilir.
+
+| Kolon | Anlam |
+|---|---|
+| `Ydeh`, `Ydo` | Yeniden değerleme (`EVET` / `HAYIR` / `ENF.`) ve oranı |
+| `Dgb` | Giriş (alış) bedeli |
+| `Dobad`, `Dobam`, `Donad` | Dönem başı değer, birikmiş amortisman ve net değer (`Dobad - Dobam`) |
+| `Ada`, `Bada`, `Daf` | Değer artışı, birikmiş amortisman artışı, değer artış fonu |
+| `Dsbad`, `Dsba`, `Dsnad` | Değerleme sonrası değer, birikmiş amortisman ve net değer |
+| `Daa` | Dönem amortismanı |
+| `Ba` | Dönem sonu birikmiş amortisman (`Dsba + Daa`) |
+| `Gddd` | Gelecek döneme devreden net değer (`Dsbad - Ba`) |
+| `Amo` | Amortisman oranı, burada kesir olarak (0,02 = yüzde 2) |
+
+`dbayd2` yıl başına seçilen yeniden değerleme tercihini, `dbydo` kanuni yeniden değerleme oranlarını tutar.
 
 ## Raporları yeniden üretmek
 

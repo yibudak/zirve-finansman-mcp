@@ -41,7 +41,8 @@ mcp = MCPServer(
         "Evrakno fatura/belge numarasıdır ve dış sistemlerle eşleştirme için en iyi anahtardır; "
         "Vergino karşı tarafın VKN/TCKN'sidir. Hesap kodlarında ayırıcı çoğunlukla '.' olsa da ',' ve '-' "
         "içeren kodlar vardır; kodu olduğu gibi kullanın. Tarihler YYYY-AA-GG biçimindedir. "
-        "mizan ve muavin, Zirve'nin varsayılanı gibi kapanış fişini saymaz (kapanis_dahil ile değişir)."
+        "mizan ve muavin, Zirve'nin varsayılanı gibi kapanış fişini saymaz (kapanis_dahil ile değişir). "
+        "Demirbaş (sabit kıymet) kartları yıldan bağımsızdır: demirbas_ara ve demirbas_getir."
     ),
 )
 
@@ -56,7 +57,7 @@ def like_escape(s: str) -> str:
     return re.sub(r"([\\%_\[])", r"\\\1", s)
 
 
-VKN_COLS = {"Vergino", "Vergikimlikno", "Tckimlikno"}
+VKN_COLS = {"Vergino", "Vergikimlikno", "Tckimlikno", "AlisVergiNo", "SatisVergiNo"}
 
 
 def vkn_norm(s: str) -> str:
@@ -156,6 +157,22 @@ def resolve_db(dbs: dict[str, dict[int, str]], firma: str | None, yil: int | Non
     return "[" + years[yil].replace("]", "]]") + "]"
 
 
+def genel_db(names, firma: str | None) -> str:
+    """Firmanın yıldan bağımsız {FIRMA}_GENEL veritabanının alıntılanmış adını döndürür (demirbaşlar orada durur)."""
+    names = set(names)
+    firma = firma or os.environ.get("ZIRVE_FIRMA")
+    firmalar = sorted(n[: -len("_GENEL")] for n in names if n.endswith("_GENEL"))
+    if not firma:
+        if len(firmalar) != 1:
+            raise ValueError(f"firma belirtin. Mevcut firmalar: {firmalar}")
+        firma = firmalar[0]
+    if f"{firma}_GENEL" not in names:
+        raise ValueError(
+            f"{firma!r} için _GENEL veritabanı yok ya da bu kullanıcının erişimi yok. Erişilebilenler: {firmalar}"
+        )
+    return "[" + f"{firma}_GENEL".replace("]", "]]") + "]"
+
+
 class Where:
     """Parametreli WHERE biriktirici."""
 
@@ -223,9 +240,13 @@ def cursor():
         conn.close()
 
 
-def databases(cur) -> dict[str, dict[int, str]]:
+def db_names(cur) -> list[str]:
     cur.execute("SELECT name FROM sys.databases WHERE state = 0 AND database_id > 4 AND HAS_DBACCESS(name) = 1")
-    return group_databases(r["name"] for r in cur.fetchall())
+    return [r["name"] for r in cur.fetchall()]
+
+
+def databases(cur) -> dict[str, dict[int, str]]:
+    return group_databases(db_names(cur))
 
 
 def fetch(cur, sql: str, params=()) -> list[dict]:
@@ -599,6 +620,88 @@ def fis_getir(refno: int, limit: int = 200, offset: int = 0, firma: str | None =
     out = page(lines, limit, offset)
     out["satirlar"] = out.pop("kayitlar")
     return {"fis": head[0], "satir_sayisi": n, **out}
+
+
+# Demirbaş kartı (dbas). Zirve'nin kısaltılmış kolon adları okunur adlarla döndürülür.
+DEMIRBAS_COLS = (
+    "d.Dkodu AS Kod, d.Dacik AS Aciklama, d.Datar AS AlisTarihi, d.Daeno AS AlisEvrakNo, d.Datutar AS AlisTutari, "
+    "d.Dakdv AS AlisKdv, d.Daafir AS AlinanFirma, d.Avergino AS AlisVergiNo, d.Miktar, "
+    "d.Amt AS AmortismanTipi, d.Amo AS AmortismanOraniYuzde, d.Ams AS AmortismanSuresiYil, d.Kismia AS KistAmortisman, "
+    "d.St AS SatisTarihi, d.Stut AS SatisTutari, d.Skdv AS SatisKdv, d.Sfno AS SatisFaturaNo, d.Sfir AS SatilanFirma, "
+    "d.Svergino AS SatisVergiNo, d.Demmuhhk AS HesapKodu, d.Hpbada AS BirikmisAmortismanHesabi, "
+    "d.Hpdaa AS AmortismanGiderHesabi, d.Ozkod AS OzelKod"
+)
+# Yıllık değerleme/amortisman satırı (dbayd).
+DEMIRBAS_YIL_COLS = (
+    "a.Hy AS Yil, a.Ydeh AS YenidenDegerleme, a.Ydo AS YenidenDegerlemeOrani, a.Dgb AS GirisBedeli, "
+    "a.Dobad AS DonemBasiDeger, a.Dobam AS DonemBasiBirikmisAmortisman, a.Donad AS DonemBasiNetDeger, "
+    "a.Ada AS DegerArtisi, a.Bada AS BirikmisAmortismanArtisi, a.Dsbad AS DegerlemeSonrasiDeger, "
+    "a.Dsba AS DegerlemeSonrasiBirikmisAmortisman, a.Dsnad AS DegerlemeSonrasiNetDeger, a.Daf AS DegerArtisFonu, "
+    "a.Daa AS DonemAmortismani, a.Ba AS DonemSonuBirikmisAmortisman, a.Gddd AS DevredenNetDeger"
+)
+
+
+@tool
+def demirbas_ara(
+    arama: str | None = None,
+    kod_on_eki: str | None = None,
+    durum: str = "hepsi",
+    alis_baslangic: str | None = None,
+    alis_bitis: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    firma: str | None = None,
+) -> dict:
+    """Demirbaş (sabit kıymet) kartlarında arama yapar. Kartlar yıldan bağımsızdır, yil parametresi yoktur.
+
+    arama: demirbaş adında geçen metin. kod_on_eki: demirbaş kodu başlangıcı (çoğu kurulumda kod, demirbaşın
+    muhasebe hesap koduyla aynıdır; ör. "253", "254.01"). durum: "hepsi", "aktif" (satılmamış) veya "satilan".
+    alis_baslangic/alis_bitis: alış tarihi aralığı. toplam alanı sayfalamadan bağımsız adet ve alış tutarıdır.
+    HesapKodu demirbaşın muhasebe hesabıdır; hareketleri için muavin(hesap_kodu=...) kullanın.
+    """
+    if durum not in ("hepsi", "aktif", "satilan"):
+        raise ValueError(f'durum "hepsi", "aktif" veya "satilan" olmalı: {durum!r}')
+    limit, offset = paging(limit, offset)
+    w = Where()
+    w.text("d.Dacik", arama)
+    w.like("d.Dkodu", kod_on_eki, prefix=True)
+    if durum != "hepsi":
+        w.add("d.St IS NULL" if durum == "aktif" else "d.St IS NOT NULL")
+    b, e = parse_date(alis_baslangic, "alis_baslangic"), parse_date(alis_bitis, "alis_bitis")
+    if b:
+        w.add("d.Datar >= %s", b)
+    if e:
+        w.add("d.Datar <= %s", e)
+    with cursor() as cur:
+        db = genel_db(db_names(cur), firma)
+        rows = fetch(
+            cur,
+            f"SELECT {DEMIRBAS_COLS} FROM {db}.dbo.dbas d WHERE {w.sql} ORDER BY d.Dkodu {PAGING}",
+            [*w.params, offset, limit + 1],
+        )
+        total = fetch(
+            cur, f"SELECT COUNT(*) AS Adet, SUM(d.Datutar) AS AlisTutari FROM {db}.dbo.dbas d WHERE {w.sql}", w.params
+        )
+    return {**page(rows, limit, offset), "toplam": total[0] if total else {}}
+
+
+@tool
+def demirbas_getir(kod: str, firma: str | None = None) -> dict:
+    """Bir demirbaş kartını yıllık değerleme ve amortisman satırlarıyla getirir.
+
+    kod: demirbaş kodu (demirbas_ara sonucundaki Kod). yillar: her yıl için dönem başı değer, yeniden değerleme,
+    dönem amortismanı (DonemAmortismani), birikmiş amortisman ve devreden net değer.
+    Dikkat: yıllık satırları Zirve, Demirbaşlar > Raporlar ekranı çalıştırıldığında üretir; bazı yıllar eksik
+    ya da güncel olmayabilir. Kesin tutar için muhasebe kaydına (muavin) bakın.
+    """
+    kod = kod.strip()
+    with cursor() as cur:
+        db = genel_db(db_names(cur), firma)
+        kart = fetch(cur, f"SELECT {DEMIRBAS_COLS} FROM {db}.dbo.dbas d WHERE d.Dkodu = %s", [kod])
+        if not kart:
+            raise ValueError(f"Demirbaş bulunamadı: {kod!r}. Doğru kodu demirbas_ara ile bulun.")
+        yillar = fetch(cur, f"SELECT {DEMIRBAS_YIL_COLS} FROM {db}.dbo.dbayd a WHERE a.Dk = %s ORDER BY a.Hy", [kod])
+    return {"demirbas": kart[0], "yillar": yillar}
 
 
 def main():

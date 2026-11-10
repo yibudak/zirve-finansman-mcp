@@ -6,7 +6,9 @@ USE master;
 CREATE LOGIN zirve_mcp_ro WITH PASSWORD = N'BURAYA-GUCLU-BIR-PAROLA', CHECK_POLICY = ON;
 GO
 
--- SEÇENEK A (önerilen, dar): yalnızca MCP'nin okuduğu üç tabloya, yalnızca seçtiğiniz firmada yetki.
+-- SEÇENEK A (önerilen, dar): yalnızca MCP'nin okuduğu tablolara, yalnızca seçtiğiniz firmada yetki.
+-- Yıl veritabanlarında hesplan, fisbil, yevmiye; {FIRMA}_GENEL veritabanında yalnızca demirbaş tabloları
+-- (dbas, dbayd). Aynı veritabanındaki bordro ve personel tabloları kapalı kalır.
 -- Her yeni yıl veritabanı açıldığında yeniden çalıştırılmalıdır. @firma değerini değiştirin.
 DECLARE @firma sysname = N'FIRMA_ADI', @db sysname, @sql nvarchar(max);
 DECLARE c CURSOR LOCAL FAST_FORWARD FOR
@@ -25,6 +27,17 @@ BEGIN
     FETCH NEXT FROM c INTO @db;
 END
 CLOSE c; DEALLOCATE c;
+
+-- Demirbaş araçları (demirbas_ara, demirbas_getir) için. İstemiyorsanız bu bloğu silin.
+SET @db = @firma + N'_GENEL';
+IF DB_ID(@db) IS NOT NULL
+BEGIN
+    SET @sql = N'USE ' + QUOTENAME(@db) + N';
+        IF USER_ID(''zirve_mcp_ro'') IS NULL CREATE USER zirve_mcp_ro FOR LOGIN zirve_mcp_ro;
+        GRANT SELECT ON dbo.dbas  TO zirve_mcp_ro;
+        GRANT SELECT ON dbo.dbayd TO zirve_mcp_ro;';
+    EXEC (@sql);
+END
 GO
 
 -- SEÇENEK B (kolay, geniş): tüm veritabanlarında, ileride açılacaklar dahil, her tabloyu okuma yetkisi.

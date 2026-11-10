@@ -7,8 +7,8 @@ Biçim [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) düzenini, sür�
 
 ### Eklendi
 
-- Salt okunur yedi araç: `firmalari_listele`, `hesap_ara`, `mizan`, `muavin`, `yevmiye_ara`,
-  `fisleri_listele`, `fis_getir`.
+- Salt okunur dokuz araç: `firmalari_listele`, `hesap_ara`, `mizan`, `muavin`, `yevmiye_ara`,
+  `fisleri_listele`, `fis_getir`, `demirbas_ara`, `demirbas_getir`.
 - Salt okunur SQL kullanıcısı açan betik (`sql/create_readonly_login.sql`).
 - Zirve veritabanı şema notları (`docs/zirve-sema.md`).
 - Hata nedenleri istemciye metin olarak ulaşır (`ToolError`).

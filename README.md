@@ -9,7 +9,7 @@
 
 Zirve Finansman'ın genel muhasebe verisini yapay zekâ ajanlarına açan, salt okunur bir
 [MCP](https://modelcontextprotocol.io) sunucusu. Zirve'nin MSSQL veritabanına bağlanır. Ajan hesap
-planını, fişleri ve yevmiye satırlarını okur, mizan ve muavin alır.
+planını, fişleri, yevmiye satırlarını ve demirbaş kartlarını okur, mizan ve muavin alır.
 
 Ön muhasebeyi başka bir sistemde tutup resmî defteri Zirve'de işleyen şirketler için yazıldı.
 İki sistemi de gören bir ajan, eksik ya da tutarı uyuşmayan kayıtları kendisi bulur.
@@ -28,6 +28,8 @@ planını, fişleri ve yevmiye satırlarını okur, mizan ve muavin alır.
 | `yevmiye_ara` | Yevmiye satırlarını evrak no, VKN, açıklama, hesap, tutar ve tarihe göre arar |
 | `fisleri_listele` | Fiş başlıklarını listeler, belli bir tarihten sonra kaydedilenleri süzer |
 | `fis_getir` | Bir fişi başlığı ve satırlarıyla getirir (satırlar sayfalı) |
+| `demirbas_ara` | Demirbaş kartlarını ada, koda, alış tarihine ve satış durumuna göre arar |
+| `demirbas_getir` | Bir demirbaş kartını yıllık değerleme ve amortisman satırlarıyla getirir |
 
 Araçların hiçbiri veri yazmaz. Serbest SQL çalıştıran bir araç da bilerek eklenmedi.
 
@@ -92,8 +94,12 @@ Paketi PyPI yerine doğrudan depodan çalıştırmak için `args` değerini şö
 
 ## Bilmeniz gerekenler
 
-Kapsam genel muhasebeyle sınırlı. Ticari modül (fatura, stok, cari kartlar), bordro ve beyannameler
-okunmaz.
+Kapsam genel muhasebe ve demirbaş kartlarıyla sınırlı. Ticari modül (fatura, stok, cari kartlar), bordro
+ve beyannameler okunmaz.
+
+Demirbaş kartları firmanın `_GENEL` veritabanında durur. Yetki betiği o veritabanında yalnızca iki demirbaş
+tablosunu açar. Yıllık amortisman satırlarını Zirve, Demirbaşlar > Raporlar ekranı çalıştırıldığında üretir.
+Bazı yıllar eksik ya da eski kalabilir, kesin tutar için muhasebe kaydına bakın.
 
 Sorgular kilit almadan okur (`READ UNCOMMITTED`). Bu sayede muhasebe programı hiç beklemez. Bedeli şu:
 o anda kaydedilmekte olan bir fişi yarım görebilirsiniz.

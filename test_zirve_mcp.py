@@ -50,6 +50,19 @@ def test_databases_and_resolve():
         raise AssertionError((firma, yil))
 
 
+def test_genel_db():
+    names = ["A_2026", "A_GENEL", "B]x_GENEL", "zirvegenel"]
+    assert z.genel_db(names, "A") == "[A_GENEL]"
+    assert z.genel_db(names, "B]x") == "[B]]x_GENEL]"
+    assert z.genel_db(["A_GENEL"], None) == "[A_GENEL]"
+    for firma in ("C", "A_GENEL]; DROP TABLE x--", None):
+        try:
+            z.genel_db(names, firma)
+        except ValueError:
+            continue
+        raise AssertionError(firma)
+
+
 def test_where():
     w = z.Where("x = 1")
     w.like("c", "a%b", prefix=True)
